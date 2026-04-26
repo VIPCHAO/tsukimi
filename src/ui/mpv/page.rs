@@ -322,9 +322,11 @@ mod imp {
 
             #[cfg(target_os = "windows")]
             {
+                self.video_overlay
+                    .get()
+                    .remove_overlay(&self.danmaku_area.get());
                 self.danmaku_switch.set_active(false);
                 self.danmaku_switch.set_sensitive(false);
-                self.danmaku_area.set_enable_danmaku(false);
                 self.danmaku_page
                     .set_description(&gettext("Danmaku is disabled on Windows"));
             }
@@ -337,51 +339,51 @@ mod imp {
 
                 self.danmaku_area
                     .set_enable_danmaku(SETTINGS.is_danmaku_enabled());
+
+                self.danmaku_font_size_adj
+                    .bind_property("value", &self.danmaku_area.get(), "font-size")
+                    .flags(glib::BindingFlags::BIDIRECTIONAL)
+                    .build();
+
+                self.danmaku_top_padding_adj
+                    .bind_property("value", &self.danmaku_area.get(), "top-padding")
+                    .flags(glib::BindingFlags::BIDIRECTIONAL)
+                    .build();
+
+                self.scroll_danmaku_max_lines_adj
+                    .bind_property("value", &self.danmaku_area.get(), "max-lines")
+                    .flags(glib::BindingFlags::BIDIRECTIONAL)
+                    .build();
+
+                self.bottomcenter_danmaku_max_lines_adj
+                    .bind_property("value", &self.danmaku_area.get(), "bottom-center-max-lines")
+                    .flags(glib::BindingFlags::BIDIRECTIONAL)
+                    .build();
+
+                self.topcenter_danmaku_max_lines_adj
+                    .bind_property("value", &self.danmaku_area.get(), "top-center-max-lines")
+                    .flags(glib::BindingFlags::BIDIRECTIONAL)
+                    .build();
+
+                self.danmaku_speed_adj
+                    .bind_property("value", &self.danmaku_area.get(), "speed-factor")
+                    .flags(glib::BindingFlags::BIDIRECTIONAL)
+                    .build();
+
+                self.danmaku_row_spacing_adj
+                    .bind_property("value", &self.danmaku_area.get(), "row-spacing")
+                    .flags(glib::BindingFlags::BIDIRECTIONAL)
+                    .build();
+
+                self.danmaku_opacity_adj
+                    .bind_property("value", &self.danmaku_area.get(), "opacity")
+                    .flags(glib::BindingFlags::BIDIRECTIONAL)
+                    .build();
+
+                SETTINGS
+                    .bind("danmaku-opacity", &self.danmaku_opacity_adj.get(), "value")
+                    .build();
             }
-
-            self.danmaku_font_size_adj
-                .bind_property("value", &self.danmaku_area.get(), "font-size")
-                .flags(glib::BindingFlags::BIDIRECTIONAL)
-                .build();
-
-            self.danmaku_top_padding_adj
-                .bind_property("value", &self.danmaku_area.get(), "top-padding")
-                .flags(glib::BindingFlags::BIDIRECTIONAL)
-                .build();
-
-            self.scroll_danmaku_max_lines_adj
-                .bind_property("value", &self.danmaku_area.get(), "max-lines")
-                .flags(glib::BindingFlags::BIDIRECTIONAL)
-                .build();
-
-            self.bottomcenter_danmaku_max_lines_adj
-                .bind_property("value", &self.danmaku_area.get(), "bottom-center-max-lines")
-                .flags(glib::BindingFlags::BIDIRECTIONAL)
-                .build();
-
-            self.topcenter_danmaku_max_lines_adj
-                .bind_property("value", &self.danmaku_area.get(), "top-center-max-lines")
-                .flags(glib::BindingFlags::BIDIRECTIONAL)
-                .build();
-
-            self.danmaku_speed_adj
-                .bind_property("value", &self.danmaku_area.get(), "speed-factor")
-                .flags(glib::BindingFlags::BIDIRECTIONAL)
-                .build();
-
-            self.danmaku_row_spacing_adj
-                .bind_property("value", &self.danmaku_area.get(), "row-spacing")
-                .flags(glib::BindingFlags::BIDIRECTIONAL)
-                .build();
-
-            self.danmaku_opacity_adj
-                .bind_property("value", &self.danmaku_area.get(), "opacity")
-                .flags(glib::BindingFlags::BIDIRECTIONAL)
-                .build();
-
-            SETTINGS
-                .bind("danmaku-opacity", &self.danmaku_opacity_adj.get(), "value")
-                .build();
 
             self.video_scale.set_player(Some(&self.video.get()));
 
@@ -400,6 +402,7 @@ mod imp {
 
             obj.listen_events();
 
+            #[cfg(not(target_os = "windows"))]
             self.init_dandanapi_client();
 
             // Initialize MPRIS server
@@ -1018,7 +1021,6 @@ impl MPVPage {
         let has_secondary_subtitle =
             secondary_suburl.is_some() || secondary_sub_stream_index.is_some();
 
-        imp.video.set_secondary_sid(TrackSelection::None);
         if has_secondary_subtitle {
             imp.video.set_sub_pos(90);
             imp.video.set_secondary_sub_pos(100);
