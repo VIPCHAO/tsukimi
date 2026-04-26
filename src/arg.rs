@@ -126,6 +126,14 @@ impl Args {
     }
 
     #[cfg(target_os = "windows")]
+    fn init_gio_vfs(&self) {
+        if std::env::var("GIO_USE_VFS").is_err() {
+            info!("Windows: Falling back to GIO_USE_VFS=local");
+            unsafe { std::env::set_var("GIO_USE_VFS", "local") };
+        }
+    }
+
+    #[cfg(target_os = "windows")]
     fn init_config_dirs(&self) {
         if let Some(xdg_cache_home) = self.xdg_cache_home.as_deref() {
             info!("Windows: Setting XDG_CACHE_HOME to {}", xdg_cache_home);
@@ -142,6 +150,10 @@ impl Args {
     pub fn init(&self) {
         self.init_tracing_subscriber();
         self.init_gsk_renderer();
+
+        #[cfg(target_os = "windows")]
+        self.init_gio_vfs();
+
         self.init_glib_to_tracing();
 
         #[cfg(target_os = "windows")]
