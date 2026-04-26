@@ -605,10 +605,21 @@ fn get_sub_tracks(mpv: &Mpv) -> Vec<MpvTrack> {
 fn node_to_tracks(node: MpvNode) -> MpvTracks {
     let mut audio_tracks = Vec::new();
     let mut sub_tracks = Vec::new();
-    let array = node.array().unwrap();
+    let Some(array) = node.array() else {
+        return MpvTracks {
+            audio_tracks,
+            sub_tracks,
+        };
+    };
+
     for node in array {
-        let range = node.map().unwrap().collect::<HashMap<_, _>>();
-        let id = range.get("id").unwrap().i64().unwrap();
+        let Some(map) = node.map() else {
+            continue;
+        };
+        let range = map.collect::<HashMap<_, _>>();
+        let Some(id) = range.get("id").and_then(|v| v.i64()) else {
+            continue;
+        };
         let title = range
             .get("title")
             .and_then(|v| v.str())
@@ -621,12 +632,14 @@ fn node_to_tracks(node: MpvNode) -> MpvTracks {
             .unwrap_or("unknown")
             .to_string();
 
-        let type_ = range.get("type").unwrap().str().unwrap().to_string();
+        let Some(type_) = range.get("type").and_then(|v| v.str()) else {
+            continue;
+        };
         let track = MpvTrack {
             id,
             title,
             lang,
-            type_,
+            type_: type_.to_string(),
         };
         if track.type_ == "audio" {
             audio_tracks.push(track);
@@ -658,15 +671,23 @@ pub struct Chapter {
 
 fn node_to_chapter_list(node: MpvNode) -> ChapterList {
     let mut chapters = Vec::new();
-    let array = node.array().unwrap();
+    let Some(array) = node.array() else {
+        return ChapterList(chapters);
+    };
+
     for node in array {
-        let range = node.map().unwrap().collect::<HashMap<_, _>>();
+        let Some(map) = node.map() else {
+            continue;
+        };
+        let range = map.collect::<HashMap<_, _>>();
         let title = range
             .get("title")
             .and_then(|v| v.str())
             .unwrap_or("unknown")
             .to_string();
-        let time = range.get("time").unwrap().f64().unwrap();
+        let Some(time) = range.get("time").and_then(|v| v.f64()) else {
+            continue;
+        };
         chapters.push(Chapter { title, time });
     }
     ChapterList(chapters)
