@@ -320,12 +320,24 @@ mod imp {
                 .bind("mpv-default-volume", &self.volume_adj.get(), "value")
                 .build();
 
-            SETTINGS
-                .bind("is-danmaku-enabled", &self.danmaku_switch.get(), "active")
-                .build();
+            #[cfg(target_os = "windows")]
+            {
+                self.danmaku_switch.set_active(false);
+                self.danmaku_switch.set_sensitive(false);
+                self.danmaku_area.set_enable_danmaku(false);
+                self.danmaku_page
+                    .set_description(&gettext("Danmaku is disabled on Windows"));
+            }
 
-            self.danmaku_area
-                .set_enable_danmaku(SETTINGS.is_danmaku_enabled());
+            #[cfg(not(target_os = "windows"))]
+            {
+                SETTINGS
+                    .bind("is-danmaku-enabled", &self.danmaku_switch.get(), "active")
+                    .build();
+
+                self.danmaku_area
+                    .set_enable_danmaku(SETTINGS.is_danmaku_enabled());
+            }
 
             self.danmaku_font_size_adj
                 .bind_property("value", &self.danmaku_area.get(), "font-size")
@@ -503,6 +515,18 @@ impl Default for MPVPage {
 
 #[gtk::template_callbacks]
 impl MPVPage {
+    fn is_danmaku_runtime_enabled() -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            false
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            SETTINGS.is_danmaku_enabled()
+        }
+    }
+
     pub fn new() -> Self {
         Object::new()
     }
@@ -710,7 +734,7 @@ impl MPVPage {
 
                 imp.video.play(&video_url, per);
 
-                if SETTINGS.is_danmaku_enabled() {
+                if Self::is_danmaku_runtime_enabled() {
                     obj.imp().danmaku_area.clear_danmaku();
                     obj.load_danmaku().await;
                 } else {
@@ -1440,6 +1464,10 @@ impl MPVPage {
     }
 
     pub async fn load_danmaku(&self) {
+        if !Self::is_danmaku_runtime_enabled() {
+            return;
+        }
+
         if !self.key_vaild() {
             return;
         }
@@ -1540,6 +1568,17 @@ impl MPVPage {
 
     #[template_callback]
     pub fn on_danmaku_switch_state_set(&self, state: bool) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            let _ = state;
+            self.imp().danmaku_area.clear_danmaku();
+            self.imp().pause_danmaku();
+            let _ = SETTINGS.set_danmaku_enabled(false);
+            return true;
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
         self.imp().danmaku_area.set_enable_danmaku(state);
 
         if state {
@@ -1563,6 +1602,7 @@ impl MPVPage {
         let _ = SETTINGS.set_danmaku_enabled(state);
 
         false
+        }
     }
 
     pub fn notify_has_chapters(&self, has_chapters: bool) {
