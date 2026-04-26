@@ -155,6 +155,8 @@ pub(crate) mod imp {
         #[template_child]
         pub subdropdown: TemplateChild<gtk::DropDown>,
         #[template_child]
+        pub secondary_subdropdown: TemplateChild<gtk::DropDown>,
+        #[template_child]
         pub carousel: TemplateChild<ItemCarousel>,
         #[template_child]
         pub actionbox: TemplateChild<ItemActionsBox>,
@@ -184,6 +186,7 @@ pub(crate) mod imp {
 
         pub videoselection: gtk::SingleSelection,
         pub subselection: gtk::SingleSelection,
+        pub secondary_subselection: gtk::SingleSelection,
 
         #[template_child]
         pub main_carousel: TemplateChild<adw::Carousel>,
@@ -252,10 +255,13 @@ pub(crate) mod imp {
 
             let namedropdown = self.namedropdown.get();
             let subdropdown = self.subdropdown.get();
+            let secondary_subdropdown = self.secondary_subdropdown.get();
             namedropdown.set_factory(Some(&factory::<true>()));
             namedropdown.set_list_factory(Some(&factory::<false>()));
             subdropdown.set_factory(Some(&factory::<true>()));
             subdropdown.set_list_factory(Some(&factory::<false>()));
+            secondary_subdropdown.set_factory(Some(&factory::<true>()));
+            secondary_subdropdown.set_list_factory(Some(&factory::<false>()));
 
             let store = gtk::gio::ListStore::new::<TuObject>();
             self.selection.set_model(Some(&store));
@@ -698,6 +704,7 @@ impl ItemPage {
         let imp = self.imp();
         let namedropdown = imp.namedropdown.get();
         let subdropdown = imp.subdropdown.get();
+        let secondary_subdropdown = imp.secondary_subdropdown.get();
 
         let matcher = imp.video_version_matcher.borrow().to_owned();
 
@@ -707,8 +714,13 @@ impl ItemPage {
         let sstore = gtk::gio::ListStore::new::<glib::BoxedAnyObject>();
         imp.subselection.set_model(Some(&sstore));
 
+        let secondary_sstore = gtk::gio::ListStore::new::<glib::BoxedAnyObject>();
+        imp.secondary_subselection
+            .set_model(Some(&secondary_sstore));
+
         namedropdown.set_model(Some(&imp.videoselection));
         subdropdown.set_model(Some(&imp.subselection));
+        secondary_subdropdown.set_model(Some(&imp.secondary_subselection));
 
         let media_sources = playbackinfo.media_sources.to_owned();
 
@@ -730,6 +742,17 @@ impl ItemPage {
                 for _i in 0..sstore.n_items() {
                     sstore.remove(0);
                 }
+                for _i in 0..secondary_sstore.n_items() {
+                    secondary_sstore.remove(0);
+                }
+                let Ok(none_dl) = DropdownListBuilder::default()
+                    .line1(Some(gettext("None")))
+                    .build()
+                else {
+                    return;
+                };
+                secondary_sstore.append(&glib::BoxedAnyObject::new(none_dl));
+
                 for media in &media_sources {
                     if &Some(media.id.to_owned()) == selected {
                         let mut lang_list = Vec::new();
@@ -749,14 +772,15 @@ impl ItemPage {
 
                                 lang_list
                                     .push((stream.index, dl.line1.to_owned().unwrap_or_default()));
-                                let object = glib::BoxedAnyObject::new(dl);
-                                sstore.append(&object);
+                                sstore.append(&glib::BoxedAnyObject::new(dl.to_owned()));
+                                secondary_sstore.append(&glib::BoxedAnyObject::new(dl));
                             }
                         }
 
                         if let Some(u) = make_subtitle_version_choice(lang_list) {
                             subdropdown.set_selected(u.1 as u32);
                         }
+                        secondary_subdropdown.set_selected(0);
                         break;
                     }
                 }
@@ -1219,6 +1243,7 @@ impl ItemPage {
     async fn play_cb(&self) {
         let video_dropdown = self.imp().namedropdown.get();
         let sub_dropdown = self.imp().subdropdown.get();
+        let secondary_sub_dropdown = self.imp().secondary_subdropdown.get();
 
         let Some(video_object) = video_dropdown
             .selected_item()
@@ -1232,21 +1257,19 @@ impl ItemPage {
             .selected_item()
             .and_downcast::<glib::BoxedAnyObject>()
             .map(|obj| obj.borrow::<DropdownList>().to_owned());
+        let secondary_sub_dl = secondary_sub_dropdown
+            .selected_item()
+            .and_downcast::<glib::BoxedAnyObject>()
+            .map(|obj| obj.borrow::<DropdownList>().to_owned());
 
         let video_dl: std::cell::Ref<DropdownList> = video_object.borrow();
-        let (sub_index, sub_lang) = sub_dl
-            .map(|sub_dl| {
-                (
-                    sub_dl.index.unwrap_or_default(),
-                    sub_dl.sub_lang.to_owned().unwrap_or_default(),
-                )
-            })
-            .unwrap_or_default();
+        let primary_subtitle = sub_dl.and_then(SubtitleSelection::from_dropdown);
+        let secondary_subtitle = secondary_sub_dl.and_then(SubtitleSelection::from_dropdown);
 
         let info = SelectedVideoSubInfo {
-            sub_index,
+            primary_subtitle,
+            secondary_subtitle,
             video_index: video_dl.index.unwrap_or_default(),
-            sub_lang,
             media_source_id: video_dl.id.to_owned().unwrap_or_default(),
         };
 
@@ -1415,9 +1438,24 @@ pub fn dt(date: Option<chrono::DateTime<Utc>>) -> String {
 }
 
 #[derive(Debug, Clone)]
-pub struct SelectedVideoSubInfo {
+pub struct SubtitleSelection {
     pub sub_lang: String,
     pub sub_index: u64,
+}
+
+impl SubtitleSelection {
+    fn from_dropdown(dropdown: DropdownList) -> Option<Self> {
+        Some(Self {
+            sub_lang: dropdown.sub_lang.unwrap_or_default(),
+            sub_index: dropdown.index?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SelectedVideoSubInfo {
+    pub primary_subtitle: Option<SubtitleSelection>,
+    pub secondary_subtitle: Option<SubtitleSelection>,
     pub video_index: u64,
     pub media_source_id: String,
 }

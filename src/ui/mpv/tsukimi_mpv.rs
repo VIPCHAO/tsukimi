@@ -6,6 +6,7 @@ use std::{
         atomic::AtomicU32,
     },
     thread::JoinHandle,
+    time::Duration,
 };
 
 use libmpv2::{
@@ -47,6 +48,7 @@ impl std::fmt::Debug for TsukimiMPV {
 
 pub enum TrackSelection {
     Track(i64),
+    Auto,
     None,
 }
 
@@ -54,6 +56,7 @@ impl std::fmt::Display for TrackSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let str = match self {
             TrackSelection::Track(id) => id.to_string(),
+            TrackSelection::Auto => "auto".to_string(),
             TrackSelection::None => "no".to_string(),
         };
         write!(f, "{str}")
@@ -234,8 +237,77 @@ impl TsukimiMPV {
         self.command("cycle", &["pause"]);
     }
 
-    pub fn add_sub(&self, url: &str) {
-        self.command("sub-add", &[url, "select"]);
+    pub async fn add_sub_select(&self, url: &str) -> Option<i64> {
+        self.add_sub(url, "select").await
+    }
+
+    pub async fn add_sub_auto(&self, url: &str) -> Option<i64> {
+        self.add_sub(url, "auto").await
+    }
+
+    async fn add_sub(&self, url: &str, flags: &str) -> Option<i64> {
+        let mpv = Arc::clone(&self.mpv);
+        let url = url.to_string();
+        let flags = flags.to_string();
+        spawn_tokio(async move {
+            let before = get_sub_track_ids(&mpv);
+            let args = [url.as_str(), flags.as_str()];
+            mpv.command("sub-add", &args)
+                .map_err(|e| warn!("MPV command Error: {}, Command: sub-add", e))
+                .ok()?;
+
+            for _ in 0..20 {
+                let after = get_sub_track_ids(&mpv);
+                if let Some(track_id) = after.iter().find(|id| !before.contains(id)) {
+                    return Some(*track_id);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+
+            None
+        })
+        .await
+    }
+
+    pub async fn find_sub_track_id(
+        &self, title: Option<String>, lang: Option<String>, fallback_index: u64,
+    ) -> Option<i64> {
+        let mpv = Arc::clone(&self.mpv);
+        spawn_tokio(async move {
+            for _ in 0..20 {
+                let tracks = get_sub_tracks(&mpv);
+                if tracks.is_empty() {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+
+                if let Some(title) = title.as_deref().filter(|title| !title.is_empty()) {
+                    if let Some(track) = tracks.iter().find(|track| {
+                        track.title == title
+                            || track.title.contains(title)
+                            || title.contains(track.title.as_str())
+                    }) {
+                        return Some(track.id);
+                    }
+                }
+
+                if let Some(lang) = lang.as_deref().filter(|lang| !lang.is_empty()) {
+                    if let Some(track) = tracks.iter().find(|track| track.lang == lang) {
+                        return Some(track.id);
+                    }
+                }
+
+                if let Some(track) = tracks.iter().find(|track| track.id == fallback_index as i64)
+                {
+                    return Some(track.id);
+                }
+
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+
+            None
+        })
+        .await
     }
 
     pub fn load_video(&self, url: &str) {
@@ -264,6 +336,18 @@ impl TsukimiMPV {
 
     pub fn set_sid(&self, sid: TrackSelection) {
         self.set_property("sid", sid.to_string());
+    }
+
+    pub fn set_secondary_sid(&self, sid: TrackSelection) {
+        self.set_property("secondary-sid", sid.to_string());
+    }
+
+    pub fn set_sub_pos(&self, value: i64) {
+        self.set_property("sub-pos", value);
+    }
+
+    pub fn set_secondary_sub_pos(&self, value: i64) {
+        self.set_property("secondary-sub-pos", value);
     }
 
     pub fn seek_forward(&self, value: i64) {
@@ -506,6 +590,18 @@ pub struct MpvTracks {
     pub sub_tracks: Vec<MpvTrack>,
 }
 
+fn get_sub_track_ids(mpv: &Mpv) -> Vec<i64> {
+    get_sub_tracks(mpv).iter().map(|track| track.id).collect()
+}
+
+fn get_sub_tracks(mpv: &Mpv) -> Vec<MpvTrack> {
+    let Ok(node) = mpv.get_property::<MpvNode>("track-list") else {
+        return Vec::new();
+    };
+
+    node_to_tracks(node).sub_tracks
+}
+
 fn node_to_tracks(node: MpvNode) -> MpvTracks {
     let mut audio_tracks = Vec::new();
     let mut sub_tracks = Vec::new();
@@ -632,7 +728,10 @@ use super::options_matcher::{
 use crate::{
     client::error::UserFacingError,
     ui::models::SETTINGS,
-    utils::spawn_tokio_without_await,
+    utils::{
+        spawn_tokio,
+        spawn_tokio_without_await,
+    },
 };
 
 const KEYSTRING_MAP: &[(&str, &str)] = &[

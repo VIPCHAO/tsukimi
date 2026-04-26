@@ -168,6 +168,10 @@ mod imp {
         pub y: RefCell<f64>,
         pub last_motion_time: RefCell<i64>,
         pub suburl: RefCell<Option<String>>,
+        pub secondary_suburl: RefCell<Option<String>>,
+        pub secondary_sub_stream_index: RefCell<Option<u64>>,
+        pub secondary_sub_title: RefCell<Option<String>>,
+        pub secondary_sub_lang: RefCell<Option<String>>,
         pub popover: RefCell<Option<PopoverMenu>>,
         pub menu_actions: MenuActions,
         pub shortcuts_window: RefCell<Option<ShortcutsWindow>>,
@@ -555,8 +559,16 @@ impl MPVPage {
                 imp.network_speed_label
                     .set_text(&gettext("Initializing..."));
 
-                let sub_stream_index = selected.to_owned().map(|s| s.sub_index);
-                let media_source_id = selected.to_owned().map(|s| s.media_source_id);
+                let primary_subtitle = selected
+                    .as_ref()
+                    .and_then(|s| s.primary_subtitle.as_ref())
+                    .cloned();
+                let secondary_subtitle = selected
+                    .as_ref()
+                    .and_then(|s| s.secondary_subtitle.as_ref())
+                    .cloned();
+                let sub_stream_index = primary_subtitle.as_ref().map(|s| s.sub_index);
+                let media_source_id = selected.as_ref().map(|s| s.media_source_id.to_owned());
                 let id_clone = id.to_owned();
                 let playback_info = match spawn_tokio(async move {
                     JELLYFIN_CLIENT
@@ -573,7 +585,7 @@ impl MPVPage {
                 };
 
                 let media_source =
-                    if let Some(video_stream_index) = selected.to_owned().map(|s| s.video_index) {
+                    if let Some(video_stream_index) = selected.as_ref().map(|s| s.video_index) {
                         playback_info.media_sources.get(video_stream_index as usize)
                     } else {
                         let video_version_list: Vec<_> = playback_info
@@ -606,10 +618,9 @@ impl MPVPage {
 
                 imp.back.replace(Some(back));
 
-                let media_stream =
-                    if let Some(sub_stream_index) = selected.to_owned().map(|s| s.sub_index) {
-                        media_source.media_streams.get(sub_stream_index as usize)
-                    } else {
+                let media_stream = if let Some(primary_subtitle) = primary_subtitle.as_ref() {
+                    find_subtitle_stream(media_source, primary_subtitle.sub_index).cloned()
+                } else {
                         let sub_version_list: Vec<_> = media_source
                             .media_streams
                             .iter()
@@ -623,17 +634,18 @@ impl MPVPage {
                             .collect();
 
                         make_subtitle_version_choice(sub_version_list)
-                            .and_then(|index| media_source.media_streams.get(index.0 as usize))
-                    };
+                            .and_then(|index| find_subtitle_stream(media_source, index.0))
+                            .cloned()
+                };
 
-                if let Some(slang) = selected.to_owned().map(|s| s.sub_lang) {
+                if let Some(slang) = primary_subtitle.as_ref().map(|s| s.sub_lang.to_owned()) {
                     imp.video.set_slang(slang);
                 } else {
                     imp.video
                         .set_slang(SETTINGS.mpv_subtitle_preferred_lang_str());
                 }
 
-                let sub_url = match media_stream {
+                let sub_url = match media_stream.as_ref() {
                     Some(stream) if stream.is_external => match &stream.delivery_url {
                         Some(url) => Some(JELLYFIN_CLIENT.get_streaming_url(url).await),
                         None => {
@@ -650,7 +662,43 @@ impl MPVPage {
                     _ => None,
                 };
 
+                let secondary_media_stream = secondary_subtitle
+                    .as_ref()
+                    .and_then(|subtitle| {
+                        find_subtitle_stream(media_source, subtitle.sub_index).cloned()
+                    });
+
+                let secondary_sub_url = match secondary_media_stream.as_ref() {
+                    Some(stream) if stream.is_external => match &stream.delivery_url {
+                        Some(url) => Some(JELLYFIN_CLIENT.get_streaming_url(url).await),
+                        None => {
+                            println!("External Secondary Subtitle without selected source");
+                            imp.obj()
+                                .external_sub_url_without_selected_source(
+                                    id.to_owned(),
+                                    stream,
+                                    media_source.id.to_owned(),
+                                )
+                                .await
+                        }
+                    },
+                    _ => None,
+                };
+
                 imp.suburl.replace(sub_url);
+                imp.secondary_suburl.replace(secondary_sub_url);
+                imp.secondary_sub_title.replace(
+                    secondary_media_stream
+                        .as_ref()
+                        .and_then(|stream| stream.title.to_owned().or(stream.display_title.to_owned())),
+                );
+                imp.secondary_sub_lang.replace(
+                    secondary_media_stream
+                        .as_ref()
+                        .and_then(|stream| stream.language.to_owned()),
+                );
+                imp.secondary_sub_stream_index
+                    .replace(secondary_media_stream.map(|stream| stream.index));
 
                 let video_url = match extract_url(media_source).await {
                     Some(video_url) => video_url,
@@ -938,9 +986,56 @@ impl MPVPage {
 
     fn on_start_file(&self) {
         let imp = self.imp();
-        if let Some(suburl) = imp.suburl.borrow().as_ref() {
-            imp.video.add_sub(suburl);
+        let suburl = imp.suburl.borrow().to_owned();
+        let secondary_suburl = imp.secondary_suburl.borrow().to_owned();
+        let secondary_sub_stream_index = *imp.secondary_sub_stream_index.borrow();
+        let secondary_sub_title = imp.secondary_sub_title.borrow().to_owned();
+        let secondary_sub_lang = imp.secondary_sub_lang.borrow().to_owned();
+        let has_secondary_subtitle =
+            secondary_suburl.is_some() || secondary_sub_stream_index.is_some();
+
+        imp.video.set_secondary_sid(TrackSelection::None);
+        if has_secondary_subtitle {
+            imp.video.set_sub_pos(90);
+            imp.video.set_secondary_sub_pos(100);
+        } else {
+            imp.video.set_sub_pos(100);
         }
+
+        spawn(glib::clone!(
+            #[weak(rename_to = obj)]
+            self,
+            async move {
+                if let Some(suburl) = suburl.as_ref() {
+                    obj.imp().video.add_sub_select(suburl).await;
+                }
+
+                if let Some(secondary_suburl) = secondary_suburl.as_ref() {
+                    if let Some(track_id) = obj.imp().video.add_sub_auto(secondary_suburl).await {
+                        obj.imp()
+                            .video
+                            .set_secondary_sid(TrackSelection::Track(track_id));
+                    } else {
+                        obj.imp().video.set_secondary_sid(TrackSelection::Auto);
+                    }
+                } else if let Some(stream_index) = secondary_sub_stream_index {
+                    let track_id = obj
+                        .imp()
+                        .video
+                        .find_sub_track_id(
+                            secondary_sub_title.to_owned(),
+                            secondary_sub_lang.to_owned(),
+                            stream_index,
+                        )
+                        .await
+                        .unwrap_or(stream_index as i64);
+                    obj.imp()
+                        .video
+                        .set_secondary_sid(TrackSelection::Track(track_id));
+                }
+            }
+        ));
+
         self.update_timeout();
         self.handle_callback(BackType::Start);
     }
@@ -1494,6 +1589,13 @@ impl MPVPage {
         #[cfg(target_os = "linux")]
         self.notify_mpris_seeked(position);
     }
+}
+
+fn find_subtitle_stream(media_source: &MediaSource, index: u64) -> Option<&MediaStream> {
+    media_source
+        .media_streams
+        .iter()
+        .find(|stream| stream.stream_type == "Subtitle" && stream.index == index)
 }
 
 pub async fn direct_stream_url(source: &MediaSource) -> Option<String> {

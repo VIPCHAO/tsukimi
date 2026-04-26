@@ -232,8 +232,21 @@ impl MPVGLArea {
         ));
     }
 
-    pub fn add_sub(&self, url: &str) {
-        self.imp().mpv().add_sub(url)
+    pub async fn add_sub_select(&self, url: &str) -> Option<i64> {
+        self.imp().mpv().add_sub_select(url).await
+    }
+
+    pub async fn add_sub_auto(&self, url: &str) -> Option<i64> {
+        self.imp().mpv().add_sub_auto(url).await
+    }
+
+    pub async fn find_sub_track_id(
+        &self, title: Option<String>, lang: Option<String>, fallback_index: u64,
+    ) -> Option<i64> {
+        self.imp()
+            .mpv()
+            .find_sub_track_id(title, lang, fallback_index)
+            .await
     }
 
     pub fn seek_forward(&self, value: i64) {
@@ -262,6 +275,18 @@ impl MPVGLArea {
 
     pub fn set_sid(&self, value: TrackSelection) {
         self.imp().mpv().set_sid(value)
+    }
+
+    pub fn set_secondary_sid(&self, value: TrackSelection) {
+        self.imp().mpv().set_secondary_sid(value)
+    }
+
+    pub fn set_sub_pos(&self, value: i64) {
+        self.imp().mpv().set_sub_pos(value)
+    }
+
+    pub fn set_secondary_sub_pos(&self, value: i64) {
+        self.imp().mpv().set_secondary_sub_pos(value)
     }
 
     pub fn press_key(&self, key: u32, state: gtk::gdk::ModifierType) {
